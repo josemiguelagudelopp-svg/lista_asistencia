@@ -48,7 +48,6 @@
             </div>
             <div>
                 <label class="text-xs font-bold text-green-900 uppercase block mb-1">Fecha (Día de salida):</label>
-                <!-- Cambiado de text a date para que despliegue el calendario -->
                 <input type="date" id="gen-fecha" class="w-full border border-green-800 rounded p-2 text-sm bg-white font-semibold">
             </div>
             <div class="flex items-end">
@@ -100,12 +99,11 @@
         function limpiarTextoParaArchivo(texto) {
             return texto
                 .normalize("NFD")
-                .replace(/[\u0300-\u036f]/g, "") // Eliminar tildes
-                .replace(/[^a-zA-Z0-9]/g, "_")  // Reemplazar caracteres especiales por guion bajo
-                .replace(/_+/g, "_");          // Evitar múltiples guiones bajos seguidos
+                .replace(/[\u0300-\u036f]/g, "") 
+                .replace(/[^a-zA-Z0-9]/g, "_")  
+                .replace(/_+/g, "_");          
         }
 
-        // Convierte el formato YYYY-MM-DD del calendario a DD/MM/YYYY para que coincida con Supabase
         function convertirFechaAFormatoBD(fechaISO) {
             if (!fechaISO) return "";
             const partes = fechaISO.split('-');
@@ -126,12 +124,12 @@
                 return;
             }
 
-            // Convertimos la fecha de YYYY-MM-DD a DD/MM/YYYY
             fechaFormateadaGlobal = convertirFechaAFormatoBD(fechaInput);
 
-            tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-gray-500">Consultando registros en Supabase...</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-gray-500">Consultando registros válidos en Supabase...</td></tr>`;
 
             try {
+                // 1. Consultar estrictamente filtrando por Materia y Fecha exacta en ambas tablas de salidas
                 const [resMayores, resMenores] = await Promise.all([
                     supabaseClient.from('salidas_campo').select('*').eq('materia', materia).eq('fecha_salida', fechaFormateadaGlobal),
                     supabaseClient.from('salidas_campo_menores').select('*').eq('materia', materia).eq('fecha_salida', fechaFormateadaGlobal)
@@ -141,38 +139,54 @@
                 let salidasMenores = resMenores.data || [];
                 let salidasTotales = [...salidasMayores, ...salidasMenores];
 
-                if (salidasTotales.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-500 font-semibold">No se encontraron estudiantes para esta materia y fecha (${fechaFormateadaGlobal}).</td></tr>`;
-                    document.getElementById('info-total').textContent = '';
-                    btnGenerar.disabled = true;
-                    btnGenerar.className = "bg-gray-400 cursor-not-allowed text-white font-bold py-3 px-8 rounded-lg shadow transition";
-                    estudiantesEncontrados = [];
-                    return;
-                }
+                let listaTemporal = [];
+                let documentosProcesados = new Set();
 
-                destinoSalidaGlobal = salidasTotales[0].destino || 'Práctica Académica UTP';
-
-                estudiantesEncontrados = [];
                 for (let salida of salidasTotales) {
-                    let firmaEst = null;
+                    // Evitar duplicados en memoria
+                    if (documentosProcesados.has(salida.documento_identidad)) continue;
 
-                    let uMayor = await supabaseClient.from('usuarios').select('firma_estudiante').eq('documento_identidad', salida.documento_identidad).single();
-                    if (uMayor.data && uMayor.data.firma_estudiante) {
+                    let firmaEst = null;
+                    let esUsuarioExistente = false;
+
+                    // 2. Validación cruzada rigurosa: Verificamos que el usuario EXISTA realmente en las tablas maestras
+                    let uMayor = await supabaseClient.from('usuarios').select('firma_estudiante, nombre_estudiante').eq('documento_identidad', salida.documento_identidad).single();
+                    
+                    if (uMayor.data && !uMayor.error) {
+                        esUsuarioExistente = true;
                         firmaEst = uMayor.data.firma_estudiante;
                     } else {
-                        let uMenor = await supabaseClient.from('usuarios_menores').select('firma_estudiante').eq('documento_identidad', salida.documento_identidad).single();
-                        if (uMenor.data && uMenor.data.firma_estudiante) {
+                        let uMenor = await supabaseClient.from('usuarios_menores').select('firma_estudiante, nombre_estudiante').eq('documento_identidad', salida.documento_identidad).single();
+                        if (uMenor.data && !uMenor.error) {
+                            esUsuarioExistente = true;
                             firmaEst = uMenor.data.firma_estudiante;
                         }
                     }
 
-                    estudiantesEncontrados.push({
-                        documento_identidad: salida.documento_identidad,
-                        nombre_estudiante: salida.nombre_estudiante,
-                        destino: salida.destino,
-                        firma_estudiante: firmaEst
-                    });
+                    // 3. Si el usuario existe y no está eliminado, lo agregamos de manera limpia
+                    if (esUsuarioExistente) {
+                        documentosProcesados.add(salida.documento_identidad);
+                        listaTemporal.push({
+                            documento_identidad: salida.documento_identidad,
+                            nombre_estudiante: salida.nombre_estudiante,
+                            destino: salida.destino,
+                            firma_estudiante: firmaEst
+                        });
+                    }
                 }
+
+                estudiantesEncontrados = listaTemporal;
+
+                if (estudiantesEncontrados.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-500 font-semibold">No se encontraron estudiantes válidos registrados para "${materia}" en la fecha ${fechaFormateadaGlobal}.</td></tr>`;
+                    document.getElementById('info-total').textContent = '';
+                    btnGenerar.disabled = true;
+                    btnGenerar.className = "bg-gray-400 cursor-not-allowed text-white font-bold py-3 px-8 rounded-lg shadow transition";
+                    return;
+                }
+
+                // Tomamos estrictamente el destino del primer estudiante válido de la lista
+                destinoSalidaGlobal = estudiantesEncontrados[0].destino || 'Práctica Académica UTP';
 
                 renderizarPreview(estudiantesEncontrados);
 
