@@ -48,7 +48,8 @@
             </div>
             <div>
                 <label class="text-xs font-bold text-green-900 uppercase block mb-1">Fecha (Día de salida):</label>
-                <input type="text" id="gen-fecha" placeholder="Ej: 15/10/2026" class="w-full border border-green-800 rounded p-2 text-sm bg-white font-semibold">
+                <!-- Cambiado de text a date para que despliegue el calendario -->
+                <input type="date" id="gen-fecha" class="w-full border border-green-800 rounded p-2 text-sm bg-white font-semibold">
             </div>
             <div class="flex items-end">
                 <button onclick="buscarEstudiantesSalida()" class="w-full bg-green-800 hover:bg-green-900 text-white font-bold p-2 rounded text-sm shadow transition">
@@ -94,6 +95,7 @@
 
         let estudiantesEncontrados = [];
         let destinoSalidaGlobal = "";
+        let fechaFormateadaGlobal = "";
 
         function limpiarTextoParaArchivo(texto) {
             return texto
@@ -103,23 +105,36 @@
                 .replace(/_+/g, "_");          // Evitar múltiples guiones bajos seguidos
         }
 
+        // Convierte el formato YYYY-MM-DD del calendario a DD/MM/YYYY para que coincida con Supabase
+        function convertirFechaAFormatoBD(fechaISO) {
+            if (!fechaISO) return "";
+            const partes = fechaISO.split('-');
+            if (partes.length === 3) {
+                return `${partes[2]}/${partes[1]}/${partes[0]}`;
+            }
+            return fechaISO;
+        }
+
         async function buscarEstudiantesSalida() {
             const materia = document.getElementById('gen-materia').value;
-            const fecha = document.getElementById('gen-fecha').value.trim();
+            const fechaInput = document.getElementById('gen-fecha').value;
             const tbody = document.getElementById('tabla-estudiantes-preview');
             const btnGenerar = document.getElementById('btn-generar');
 
-            if (!materia || !fecha) {
-                alert('Por favor selecciona una materia y escribe la fecha exacta de la salida.');
+            if (!materia || !fechaInput) {
+                alert('Por favor selecciona una materia y una fecha en el calendario.');
                 return;
             }
+
+            // Convertimos la fecha de YYYY-MM-DD a DD/MM/YYYY
+            fechaFormateadaGlobal = convertirFechaAFormatoBD(fechaInput);
 
             tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-gray-500">Consultando registros en Supabase...</td></tr>`;
 
             try {
                 const [resMayores, resMenores] = await Promise.all([
-                    supabaseClient.from('salidas_campo').select('*').eq('materia', materia).eq('fecha_salida', fecha),
-                    supabaseClient.from('salidas_campo_menores').select('*').eq('materia', materia).eq('fecha_salida', fecha)
+                    supabaseClient.from('salidas_campo').select('*').eq('materia', materia).eq('fecha_salida', fechaFormateadaGlobal),
+                    supabaseClient.from('salidas_campo_menores').select('*').eq('materia', materia).eq('fecha_salida', fechaFormateadaGlobal)
                 ]);
 
                 let salidasMayores = resMayores.data || [];
@@ -127,7 +142,7 @@
                 let salidasTotales = [...salidasMayores, ...salidasMenores];
 
                 if (salidasTotales.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-500 font-semibold">No se encontraron estudiantes para esta materia y fecha.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-500 font-semibold">No se encontraron estudiantes para esta materia y fecha (${fechaFormateadaGlobal}).</td></tr>`;
                     document.getElementById('info-total').textContent = '';
                     btnGenerar.disabled = true;
                     btnGenerar.className = "bg-gray-400 cursor-not-allowed text-white font-bold py-3 px-8 rounded-lg shadow transition";
@@ -198,7 +213,6 @@
 
         async function generarYGuardarListaAsistencia() {
             const materia = document.getElementById('gen-materia').value;
-            const fecha = document.getElementById('gen-fecha').value.trim();
 
             if (estudiantesEncontrados.length === 0) return;
 
@@ -236,7 +250,7 @@
                     }
 
                     paginaActual.drawText(materia || '', { x: 95, y: 702, size: 9, font: customFont, color: blackColor });
-                    paginaActual.drawText(fecha || '', { x: 69, y: 674, size: 9, font: customFont, color: blackColor });
+                    paginaActual.drawText(fechaFormateadaGlobal || '', { x: 69, y: 674, size: 9, font: customFont, color: blackColor });
                     paginaActual.drawText(destinoSalidaGlobal || '', { x: 131, y: 663, size: 9, font: customFont, color: blackColor });
 
                     const estudiantesPagina = estudiantesEncontrados.slice(p * tamanoPagina, (p + 1) * tamanoPagina);
@@ -270,7 +284,6 @@
                 const pdfBytes = await pdfDoc.save();
                 const blobPDF = new Blob([pdfBytes], { type: 'application/pdf' });
                 
-                // Nombre limpio sin tildes ni caracteres extraños
                 const materiaLimpia = limpiarTextoParaArchivo(materia);
                 const fileName = `lista_asistencia_${materiaLimpia}_${Date.now()}.pdf`;
 
@@ -290,7 +303,7 @@
                     .from('formatos_listas_asistencia')
                     .insert([{
                         materia: materia,
-                        fecha: fecha,
+                        fecha: fechaFormateadaGlobal,
                         destino: destinoSalidaGlobal,
                         total_estudiantes: estudiantesEncontrados.length,
                         url_pdf: urlPublica,
