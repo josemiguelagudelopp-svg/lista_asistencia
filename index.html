@@ -129,7 +129,6 @@
             tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-gray-500">Consultando registros válidos en Supabase...</td></tr>`;
 
             try {
-                // 1. Consultar estrictamente filtrando por Materia y Fecha exacta en ambas tablas de salidas
                 const [resMayores, resMenores] = await Promise.all([
                     supabaseClient.from('salidas_campo').select('*').eq('materia', materia).eq('fecha_salida', fechaFormateadaGlobal),
                     supabaseClient.from('salidas_campo_menores').select('*').eq('materia', materia).eq('fecha_salida', fechaFormateadaGlobal)
@@ -143,13 +142,11 @@
                 let documentosProcesados = new Set();
 
                 for (let salida of salidasTotales) {
-                    // Evitar duplicados en memoria
                     if (documentosProcesados.has(salida.documento_identidad)) continue;
 
                     let firmaEst = null;
                     let esUsuarioExistente = false;
 
-                    // 2. Validación cruzada rigurosa: Verificamos que el usuario EXISTA realmente en las tablas maestras
                     let uMayor = await supabaseClient.from('usuarios').select('firma_estudiante, nombre_estudiante').eq('documento_identidad', salida.documento_identidad).single();
                     
                     if (uMayor.data && !uMayor.error) {
@@ -163,7 +160,6 @@
                         }
                     }
 
-                    // 3. Si el usuario existe y no está eliminado, lo agregamos de manera limpia
                     if (esUsuarioExistente) {
                         documentosProcesados.add(salida.documento_identidad);
                         listaTemporal.push({
@@ -185,7 +181,6 @@
                     return;
                 }
 
-                // Tomamos estrictamente el destino del primer estudiante válido de la lista
                 destinoSalidaGlobal = estudiantesEncontrados[0].destino || 'Práctica Académica UTP';
 
                 renderizarPreview(estudiantesEncontrados);
@@ -237,8 +232,8 @@
                     return res.arrayBuffer();
                 });
 
-                const pdfDoc = await PDFLib.PDFDocument.load(existingPdfBytes);
-                const customFont = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+                const pdfDocTemplate = await PDFLib.PDFDocument.load(existingPdfBytes);
+                const customFont = await pdfDocTemplate.embedFont(PDFLib.StandardFonts.Helvetica);
                 const blackColor = PDFLib.rgb(0, 0, 0);
 
                 const coordenadasYFilas = [
@@ -253,20 +248,20 @@
                 const tamanoPagina = 22;
                 const totalPaginas = Math.ceil(estudiantesEncontrados.length / tamanoPagina);
 
+                // Creamos un documento PDF nuevo y limpio
+                const newPdfDoc = await PDFLib.PDFDocument.create();
+
                 for (let p = 0; p < totalPaginas; p++) {
-                    let paginaActual;
+                    // Copiamos la plantilla original pura en cada iteración para evitar sobreescrituras
+                    const [paginaClonada] = await newPdfDoc.copyPages(pdfDocTemplate, [0]);
+                    const paginaActual = newPdfDoc.addPage(paginaClonada);
 
-                    if (p === 0) {
-                        paginaActual = pdfDoc.getPages()[0];
-                    } else {
-                        const [paginaClonada] = await pdfDoc.copyPages(pdfDoc, [0]);
-                        paginaActual = pdfDoc.addPage(paginaClonada);
-                    }
-
+                    // Escribir cabecera en cada página
                     paginaActual.drawText(materia || '', { x: 95, y: 702, size: 9, font: customFont, color: blackColor });
                     paginaActual.drawText(fechaFormateadaGlobal || '', { x: 69, y: 674, size: 9, font: customFont, color: blackColor });
                     paginaActual.drawText(destinoSalidaGlobal || '', { x: 131, y: 663, size: 9, font: customFont, color: blackColor });
 
+                    // Obtener los estudiantes correspondientes a la página actual
                     const estudiantesPagina = estudiantesEncontrados.slice(p * tamanoPagina, (p + 1) * tamanoPagina);
 
                     for (let i = 0; i < estudiantesPagina.length; i++) {
@@ -280,7 +275,7 @@
                             try {
                                 const base64Data = est.firma_estudiante.split(',')[1];
                                 const firmaBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
-                                const pngImage = await pdfDoc.embedPng(firmaBytes);
+                                const pngImage = await newPdfDoc.embedPng(firmaBytes);
 
                                 paginaActual.drawImage(pngImage, {
                                     x: xFirma,
@@ -295,7 +290,7 @@
                     }
                 }
 
-                const pdfBytes = await pdfDoc.save();
+                const pdfBytes = await newPdfDoc.save();
                 const blobPDF = new Blob([pdfBytes], { type: 'application/pdf' });
                 
                 const materiaLimpia = limpiarTextoParaArchivo(materia);
